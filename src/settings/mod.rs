@@ -66,8 +66,8 @@ struct SettingsApp {
     watcher: Watcher,
     mtime: Option<SystemTime>,
     clips: (usize, Option<SystemTime>),
-    /// Carpeta y fecha de la última vez que se contaron los clips.
-    clips_seen: Option<(std::path::PathBuf, Option<SystemTime>)>,
+    /// Raíz y carpetas de juego con sus fechas: no recorrer todos los clips por cada cambio del log.
+    clips_seen: Vec<(std::path::PathBuf, Option<SystemTime>)>,
     mics: Vec<(String, String)>,
     /// Versión nueva disponible y estado de la descarga.
     update: Option<(String, String)>,
@@ -115,7 +115,7 @@ impl SettingsApp {
             watcher,
             mtime: config::config_mtime(),
             clips: (0, None),
-            clips_seen: None,
+            clips_seen: Vec::new(),
             mics: audio::capture_devices(),
             update: None,
             update_status: Default::default(),
@@ -248,10 +248,10 @@ impl SettingsApp {
         // Las novedades quedan listas cuando arranca la grabadora recién actualizada (a veces después
         // de abrir esta ventana, si hubo que bajar el texto).
         self.news = update::news();
-        let seen = (self.cfg.output_dir.clone(), std::fs::metadata(&self.cfg.output_dir).and_then(|m| m.modified()).ok());
-        if self.clips_seen.as_ref() != Some(&seen) {
-            self.clips = count_clips(&self.cfg.output_dir);
-            self.clips_seen = Some(seen);
+        let seen = clip_dirs(&self.cfg.output_dir);
+        if self.clips_seen != seen {
+            self.clips = count_clips(&seen);
+            self.clips_seen = seen;
         }
         // Si se cambió algo desde la bandeja (ej. pausar), reflejarlo acá.
         let m = config::config_mtime();
@@ -418,24 +418,66 @@ impl eframe::App for SettingsApp {
 
 /// Carpetas donde cambian cosas que muestra esta ventana: la de la app (config.json, la grabadora
 /// al arrancar) y la de los clips.
-fn watched_dirs(cfg: &Config) -> Vec<std::path::PathBuf> {
-    vec![app_dir(), cfg.output_dir.clone()]
+fn watched_dirs(cfg: &Config) -> Vec<(std::path::PathBuf, bool)> {
+    vec![(app_dir(), false), (cfg.output_dir.clone(), true)]
 }
 
-fn count_clips(dir: &Path) -> (usize, Option<SystemTime>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return (0, None) };
+/// Un nivel de carpetas, como la biblioteca. No seguir enlaces ni bajar por un árbol arbitrario.
+fn clip_dirs(root: &Path) -> Vec<(std::path::PathBuf, Option<SystemTime>)> {
+    let mut dirs = vec![(root.to_path_buf(), std::fs::metadata(root).and_then(|m| m.modified()).ok())];
+    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            dirs.push((e.path(), e.metadata().and_then(|m| m.modified()).ok()));
+        }
+    }
+    dirs[1..].sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    dirs
+}
+
+fn count_clips(dirs: &[(std::path::PathBuf, Option<SystemTime>)]) -> (usize, Option<SystemTime>) {
     let mut n = 0;
     let mut last = None;
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("mp4")) {
-            n += 1;
-            if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
-                if last.is_none_or(|l| m > l) {
-                    last = Some(m);
+    for (dir, _) in dirs {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if !e.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            let p = e.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("mp4")) {
+                n += 1;
+                if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                    if last.is_none_or(|l| m > l) {
+                        last = Some(m);
+                    }
                 }
             }
         }
     }
     (n, last)
+}
+
+#[cfg(all(test, feature = "devtools"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clip_count_includes_game_folders_and_existing_root_clips() {
+        let stamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("clip-count-{}-{stamp}", std::process::id()));
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        }
+        let _cleanup = Cleanup(root.clone());
+        std::fs::create_dir_all(root.join("Game")).unwrap();
+        std::fs::create_dir_all(root.join("Not a clip.mp4")).unwrap();
+        std::fs::write(root.join("old.mp4"), []).unwrap();
+        std::fs::write(root.join("Game/new.MP4"), []).unwrap();
+        std::fs::write(root.join("Game/notes.txt"), []).unwrap();
+        let (count, last) = count_clips(&clip_dirs(&root));
+        assert_eq!(count, 2);
+        assert!(last.is_some());
+        std::fs::remove_file(root.join("old.mp4")).unwrap();
+        assert_eq!(count_clips(&clip_dirs(&root)).0, 1);
+    }
 }

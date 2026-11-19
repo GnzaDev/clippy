@@ -3,7 +3,10 @@
 //! Lo usan la elección del monitor a grabar, el modo "Solo juegos" (imagen) y el canal de audio "Juego".
 //! Una vez detectado queda fijo mientras siga abierto, aunque hagas Alt+Tab.
 
-use windows::core::PWSTR;
+use windows::core::{w, HSTRING, PWSTR};
+use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+
+use crate::config::CaptureMode;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, RECT};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -34,6 +37,7 @@ const STILL_ACTIVE: u32 = 259;
 struct Proc {
     pid: u32,
     exe: String,
+    folder: String,
     handle: HANDLE,
     /// Última ventana del juego que estuvo adelante en pantalla completa (dice en qué monitor está).
     window: HWND,
@@ -103,6 +107,14 @@ impl Detector {
         self.game.as_ref().map(|g| g.exe.clone())
     }
 
+    /// Carpeta del clip según el modo. Sin juego identificable se conserva la carpeta base.
+    pub fn clip_folder(&self, mode: CaptureMode) -> Option<String> {
+        match mode {
+            CaptureMode::Screen => Some("DesktopCapture".into()),
+            CaptureMode::GamesOnly => self.game.as_ref().map(|g| g.folder.clone()),
+        }
+    }
+
     /// Monitor del juego, si está abierto y no minimizado.
     pub fn monitor(&self) -> Option<HMONITOR> {
         let w = self.game.as_ref()?.window;
@@ -161,7 +173,9 @@ fn open(pid: u32, window: HWND) -> Option<Proc> {
             // Algunos anticheats no dejan abrir el proceso: el nombre sale de la lista de procesos.
             snapshot().into_iter().find(|(p, _)| *p == pid).map(|(_, n)| n)?
         };
-        Some(Proc { pid, exe: exe_stem(&path), handle, window })
+        let exe = exe_stem(&path);
+        let name = product_name(&path).unwrap_or_else(|| exe.clone());
+        Some(Proc { pid, exe, folder: safe_folder_name(&name), handle, window })
     }
 }
 
@@ -172,6 +186,57 @@ fn exe_stem(path: &str) -> String {
         Some(n) if file.is_char_boundary(n) && file[n..].eq_ignore_ascii_case(".exe") => file[..n].to_string(),
         _ => file.to_string(),
     }
+}
+
+/// ProductName del ejecutable, sin una lista de nombres especiales para cada juego.
+fn product_name(path: &str) -> Option<String> {
+    if !std::path::Path::new(path).is_absolute() {
+        return None;
+    }
+    unsafe {
+        let path = HSTRING::from(path);
+        let size = GetFileVersionInfoSizeW(&path, None);
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0u64; (size as usize).div_ceil(8)];
+        GetFileVersionInfoW(&path, 0, size, data.as_mut_ptr().cast()).ok()?;
+        let block = data.as_ptr().cast();
+        let mut value = std::ptr::null_mut();
+        let mut len = 0;
+        if !VerQueryValueW(block, w!("\\VarFileInfo\\Translation"), &mut value, &mut len).as_bool() || value.is_null() {
+            return None;
+        }
+        let translations = std::slice::from_raw_parts(value.cast::<u16>(), len as usize / 2);
+        for t in translations.as_chunks::<2>().0 {
+            let key = HSTRING::from(format!("\\StringFileInfo\\{:04x}{:04x}\\ProductName", t[0], t[1]));
+            if VerQueryValueW(block, &key, &mut value, &mut len).as_bool() && !value.is_null() && len > 1 {
+                let name = String::from_utf16_lossy(std::slice::from_raw_parts(value.cast::<u16>(), len as usize));
+                let name = name.trim_matches('\0').trim();
+                if !name.is_empty() {
+                    return Some(name.into());
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Un único componente válido en Windows, incluso si ProductName contiene ':' o nombres reservados.
+fn safe_folder_name(name: &str) -> String {
+    let clean: String = name.chars().take(80).map(|c| {
+        if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }
+    }).collect();
+    let clean = clean.trim_matches([' ', '.']);
+    if clean.is_empty() {
+        return "Unknown".into();
+    }
+    let stem = clean.split('.').next().unwrap_or("").trim_end().to_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ["COM", "LPT"].into_iter().any(|p| stem.strip_prefix(p).is_some_and(|n| {
+            matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+        }));
+    if reserved { format!("_{clean}") } else { clean.into() }
 }
 
 fn alive(p: &Proc) -> bool {
@@ -225,5 +290,51 @@ fn fullscreen_window() -> Option<(u32, HWND)> {
         let mut pid = 0u32;
         GetWindowThreadProcessId(h, Some(&mut pid));
         (pid != 0).then_some((pid, h))
+    }
+}
+
+#[cfg(all(test, feature = "devtools"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folders_are_safe_windows_components() {
+        for (name, expected) in [
+            ("Counter-Strike 2", "Counter-Strike 2"),
+            ("  Juego. ", "Juego"),
+            ("../Juego: Uno?", "_Juego_ Uno_"),
+            ("CON", "_CON"),
+            ("nul.txt", "_nul.txt"),
+            ("LPT¹", "_LPT¹"),
+            ("COM9.mp4", "_COM9.mp4"),
+            ("COM10", "COM10"),
+            ("...", "Unknown"),
+            ("", "Unknown"),
+            ("Pokémon", "Pokémon"),
+        ] {
+            assert_eq!(safe_folder_name(name), expected, "{name}");
+        }
+        let long = "遊".repeat(100);
+        assert_eq!(safe_folder_name(&long).chars().count(), 80);
+        assert_eq!(safe_folder_name("Uno\nDos"), "Uno_Dos");
+    }
+
+    #[test]
+    fn destination_follows_capture_mode_and_keeps_unknown_game_at_root() {
+        let mut detector = Detector::default();
+        assert_eq!(detector.clip_folder(CaptureMode::Screen).as_deref(), Some("DesktopCapture"));
+        assert_eq!(detector.clip_folder(CaptureMode::GamesOnly), None);
+        detector.game = Some(Proc {
+            pid: 42, exe: "example-game".into(), folder: "Example Game".into(),
+            handle: HANDLE::default(), window: HWND::default(),
+        });
+        assert_eq!(detector.clip_folder(CaptureMode::GamesOnly).as_deref(), Some("Example Game"));
+        assert_eq!(detector.clip_folder(CaptureMode::Screen).as_deref(), Some("DesktopCapture"));
+    }
+
+    #[test]
+    fn executable_is_a_fallback_when_metadata_is_missing() {
+        assert!(product_name(r"C:\missing-game-for-test.exe").is_none());
+        assert_eq!(exe_stem(r"C:\Games\Game.EXE"), "Game");
     }
 }

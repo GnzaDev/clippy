@@ -24,7 +24,8 @@ use crate::app::mode::tray_pid;
 const RETRY_MS: u32 = 2000;
 
 struct Shared {
-    dirs: Mutex<Vec<PathBuf>>,
+    /// (carpeta, incluir subcarpetas). La caché de la app no necesita vigilancia recursiva.
+    dirs: Mutex<Vec<(PathBuf, bool)>>,
     changed: AtomicBool,
     /// Evento para que el hilo vuelva a armar lo que mira (cambiaron las carpetas).
     wake: isize,
@@ -34,7 +35,7 @@ pub struct Watcher(Arc<Shared>);
 
 impl Watcher {
     /// `tray`: avisar también cuando la grabadora se abre o se cierra.
-    pub fn new(ctx: egui::Context, dirs: Vec<PathBuf>, tray: bool) -> Watcher {
+    pub fn new(ctx: egui::Context, dirs: Vec<(PathBuf, bool)>, tray: bool) -> Watcher {
         let wake = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }.map_or(0, |h| h.0 as isize);
         let shared = Arc::new(Shared { dirs: Mutex::new(dirs), changed: AtomicBool::new(true), wake });
         if wake != 0 {
@@ -45,7 +46,7 @@ impl Watcher {
     }
 
     /// Cambia las carpetas que se miran (por ejemplo, si se eligió otra carpeta de clips).
-    pub fn set_dirs(&self, dirs: Vec<PathBuf>) {
+    pub fn set_dirs(&self, dirs: Vec<(PathBuf, bool)>) {
         let mut d = self.0.dirs.lock().unwrap();
         if *d != dirs {
             *d = dirs;
@@ -71,7 +72,7 @@ fn run(s: &Shared, ctx: &egui::Context, watch_tray: bool) {
         let dirs = s.dirs.lock().unwrap().clone();
         let filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE;
         let notes: Vec<HANDLE> =
-            dirs.iter().filter_map(|d| unsafe { FindFirstChangeNotificationW(&HSTRING::from(d.as_os_str()), false, filter).ok() }).collect();
+            dirs.iter().filter_map(|(d, tree)| unsafe { FindFirstChangeNotificationW(&HSTRING::from(d.as_os_str()), *tree, filter).ok() }).collect();
         let tray = if watch_tray { tray_pid().and_then(|pid| unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok() }) } else { None };
         let mut handles = vec![wake];
         handles.extend(&notes);

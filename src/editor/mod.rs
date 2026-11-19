@@ -219,7 +219,7 @@ impl EditorApp {
     fn new(ctx: egui::Context, file: Option<PathBuf>) -> Self {
         let cfg = config::load();
         let imported = library::load_imported();
-        let watcher = Watcher::new(ctx.clone(), vec![crate::log::app_dir(), cfg.output_dir.clone()], false);
+        let watcher = Watcher::new(ctx.clone(), vec![(crate::log::app_dir(), false), (cfg.output_dir.clone(), true)], false);
         let mut app = Self {
             loader: Loader::new(ctx.clone()),
             ctx,

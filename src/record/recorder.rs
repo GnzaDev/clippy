@@ -476,7 +476,10 @@ fn save_clip(cfg: &Config, packets: &VecDeque<Packet>, enc: &Encoder, au: &Audio
         }
     }
 
-    let dir = cfg.output_dir.clone();
+    let dir = match au.game.clip_folder(cfg.capture_mode) {
+        Some(folder) => cfg.output_dir.join(folder),
+        None => cfg.output_dir.clone(),
+    };
     let stamp = file_stamp();
     let mut path = dir.join(format!("Clippy_{stamp}.mp4"));
     let mut i = 2;

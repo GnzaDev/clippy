@@ -178,9 +178,9 @@ impl EditorApp {
     }
 
     /// Carpetas que se miran por si cambian: la de la app, la de los clips y la que se ve.
-    pub(super) fn watched_dirs(&self) -> Vec<PathBuf> {
-        let mut v = vec![crate::log::app_dir(), self.cfg.output_dir.clone()];
-        v.extend(self.browser.dir.clone());
+    pub(super) fn watched_dirs(&self) -> Vec<(PathBuf, bool)> {
+        let mut v = vec![(crate::log::app_dir(), false), (self.cfg.output_dir.clone(), true)];
+        v.extend(self.browser.dir.clone().map(|p| (p, false)));
         v
     }
 

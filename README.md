@@ -9,6 +9,20 @@ Descarga y novedades en [clpy.vercel.app](https://clpy.vercel.app). Las versione
 los [Releases](https://github.com/santiremedi/clippy/releases) de este repo, que es donde las busca
 el actualizador automático.
 
+## Organización de clips
+
+Los clips nuevos se organizan dentro de la carpeta de destino configurada:
+
+- **Toda la pantalla:** `DesktopCapture/`, aunque haya un juego detectado.
+- **Solo juegos:** una carpeta con el nombre del juego detectado por Clippy. Se usa ProductName
+  del ejecutable o, si no está disponible, su nombre sin `.exe`.
+- **Solo juegos sin juego identificable:** se conserva la carpeta de destino base.
+
+Los nombres se adaptan a las restricciones de Windows. Las carpetas se crean al guardar y se
+reutilizan; los clips anteriores no se mueven. La biblioteca ya permite navegar las subcarpetas.
+Se reutiliza el detector de juegos, que mantiene el juego al hacer Alt+Tab, en vez de usar el nombre
+de otra aplicación que esté en primer plano al guardar.
+
 ## Compilar
 
 ```bash
