@@ -6,7 +6,6 @@
 use windows::core::{w, HSTRING, PWSTR};
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
 
-use crate::config::CaptureMode;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, RECT};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -107,12 +106,9 @@ impl Detector {
         self.game.as_ref().map(|g| g.exe.clone())
     }
 
-    /// Carpeta del clip según el modo. Sin juego identificable se conserva la carpeta base.
-    pub fn clip_folder(&self, mode: CaptureMode) -> Option<String> {
-        match mode {
-            CaptureMode::Screen => Some("DesktopCapture".into()),
-            CaptureMode::GamesOnly => self.game.as_ref().map(|g| g.folder.clone()),
-        }
+    /// La organización depende del juego detectado, no del modo de captura.
+    pub fn clip_folder(&self) -> String {
+        self.game.as_ref().map(|g| g.folder.clone()).unwrap_or_else(|| "DesktopCapture".into())
     }
 
     /// Monitor del juego, si está abierto y no minimizado.
@@ -320,16 +316,16 @@ mod tests {
     }
 
     #[test]
-    fn destination_follows_capture_mode_and_keeps_unknown_game_at_root() {
+    fn destination_follows_detected_game_independently_of_capture_mode() {
         let mut detector = Detector::default();
-        assert_eq!(detector.clip_folder(CaptureMode::Screen).as_deref(), Some("DesktopCapture"));
-        assert_eq!(detector.clip_folder(CaptureMode::GamesOnly), None);
+        assert_eq!(detector.clip_folder(), "DesktopCapture");
         detector.game = Some(Proc {
             pid: 42, exe: "example-game".into(), folder: "Example Game".into(),
             handle: HANDLE::default(), window: HWND::default(),
         });
-        assert_eq!(detector.clip_folder(CaptureMode::GamesOnly).as_deref(), Some("Example Game"));
-        assert_eq!(detector.clip_folder(CaptureMode::Screen).as_deref(), Some("DesktopCapture"));
+        assert_eq!(detector.clip_folder(), "Example Game");
+        detector.game = None;
+        assert_eq!(detector.clip_folder(), "DesktopCapture");
     }
 
     #[test]
