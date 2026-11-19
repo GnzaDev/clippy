@@ -493,11 +493,49 @@ impl SettingsApp {
 
     fn audio_section(&mut self, ui: &mut egui::Ui) {
         section(ui, tr!("Audio", "Audio", "Áudio"), |ui| {
-            volume_row(ui, tr!("Juego", "Game", "Jogo"), &mut self.cfg.game_audio, &mut self.cfg.game_volume);
+            row(ui, tr!("Salida de audio", "Audio output", "Saída de áudio"), LABEL_W, |ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if button(ui, tr!("Actualizar", "Refresh", "Atualizar"), Kind::Secondary)
+                        .on_hover_text(tr!("Buscar salidas conectadas", "Look for connected outputs", "Procurar saídas conectadas"))
+                        .clicked()
+                    {
+                        self.outputs = audio::output_devices();
+                    }
+                    let default = tr!("Predeterminado", "Default", "Padrão");
+                    let current = if self.cfg.output_device.is_empty() {
+                        default.to_string()
+                    } else {
+                        self.outputs.iter().find(|(id, _)| *id == self.cfg.output_device)
+                            .map(|(_, name)| name.clone())
+                            .unwrap_or_else(|| tr!("Salida desconectada", "Output disconnected", "Saída desconectada").into())
+                    };
+                    egui::ComboBox::from_id_salt("output_device")
+                        .width((ui.available_width() - 8.0).max(60.0))
+                        .truncate()
+                        .selected_text(current.clone())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.cfg.output_device, String::new(), default);
+                            for (id, name) in &self.outputs {
+                                ui.selectable_value(&mut self.cfg.output_device, id.clone(), name);
+                            }
+                        })
+                        .response.on_hover_text(current);
+                });
+            });
+            let separate = self.cfg.output_device.is_empty();
+            ui.add_enabled_ui(separate, |ui| {
+                volume_row(ui, tr!("Juego", "Game", "Jogo"), &mut self.cfg.game_audio, &mut self.cfg.game_volume);
+            });
             hint(
                 ui,
                 LABEL_W + 8.0,
-                if self.cfg.game_audio {
+                if !separate {
+                    tr!(
+                        "El juego ya va incluido en la salida elegida; no se mezcla dos veces.",
+                        "The game is already included in the selected output; it isn't mixed twice.",
+                        "O jogo já está incluído na saída escolhida; ele não é mixado duas vezes."
+                    )
+                } else if self.cfg.game_audio {
                     tr!(
                         "Se detecta solo: el juego que tengas en pantalla completa. Mientras no haya uno, todo va a Escritorio.",
                         "Detected automatically: whatever game you have in fullscreen. While there isn't one, everything goes to Desktop.",
@@ -512,8 +550,21 @@ impl SettingsApp {
                 },
             );
             divider(ui);
-            volume_row(ui, tr!("Escritorio", "Desktop", "Área de trabalho"), &mut self.cfg.desktop_audio, &mut self.cfg.desktop_volume);
-            hint(ui, LABEL_W + 8.0, tr!("Todo lo demás: Discord, música, navegador.", "Everything else: Discord, music, browser.", "Todo o resto: Discord, música, navegador."));
+            let label = if separate {
+                tr!("Escritorio", "Desktop", "Área de trabalho")
+            } else {
+                tr!("Salida seleccionada", "Selected output", "Saída selecionada")
+            };
+            volume_row(ui, label, &mut self.cfg.desktop_audio, &mut self.cfg.desktop_volume);
+            hint(ui, LABEL_W + 8.0, if separate {
+                tr!("Todo lo demás: Discord, música, navegador.", "Everything else: Discord, music, browser.", "Todo o resto: Discord, música, navegador.")
+            } else {
+                tr!(
+                    "Todo lo que suena por esa salida. Si se desconecta, no se graba otra; reconectala o elegí una distinta.",
+                    "Everything playing through that output. If disconnected, no other output is recorded; reconnect it or choose another.",
+                    "Tudo que toca nessa saída. Se ela desconectar, nenhuma outra será gravada; reconecte ou escolha outra."
+                )
+            });
             divider(ui);
             row(ui, tr!("Micrófono", "Microphone", "Microfone"), LABEL_W, |ui| {
                 let tip = if self.cfg.mic_audio {

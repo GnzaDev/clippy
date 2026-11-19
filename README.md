@@ -9,6 +9,24 @@ Descarga y novedades en [clpy.vercel.app](https://clpy.vercel.app). Las versione
 los [Releases](https://github.com/santiremedi/clippy/releases) de este repo, que es donde las busca
 el actualizador automático.
 
+## Salida de audio para los clips
+
+En la sección **Audio**, el selector **Salida de audio** permite elegir auriculares, parlantes,
+HDMI o una salida virtual sin cambiar por dónde escuchás en Windows.
+
+- **Predeterminado:** conserva la separación original entre Juego y Escritorio.
+- **Una salida concreta:** el control “Salida seleccionada” graba todo lo que suene por ese
+  dispositivo, incluido el juego. El canal Juego queda deshabilitado para no mezclarlo dos veces;
+  su configuración se conserva para cuando vuelvas a Predeterminado.
+- El micrófono mantiene su dispositivo, volumen e interruptor independientes.
+- Si la salida se desconecta o falla, no se cambia a otro dispositivo automáticamente. Reconectala
+  o elegí otra; tocá **Actualizar** para volver a buscar salidas conectadas.
+- Al cambiar de salida se descarta el audio anterior del búfer de Juego/Escritorio, pero no se
+  reinicia el video ni el micrófono. Para un clip con audio completo, esperá a que se vuelva a
+  llenar la duración elegida.
+
+Las configuraciones anteriores mantienen el comportamiento original si no elegís una salida.
+
 ## Compilar
 
 ```bash

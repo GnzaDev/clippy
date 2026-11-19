@@ -216,16 +216,25 @@ impl AudioState {
             }
         }
         let pid = self.game.pid();
-        let game = pid.filter(|_| cfg.game_audio).map(Source::Only);
+        let game = pid.filter(|_| cfg.separate_game_audio()).map(Source::Only);
         self.game_ch.sync(game, None, now, "juego");
         self.mic.sync(cfg.mic_audio.then(|| Source::Mic(cfg.mic_device.clone())), None, now, "micrófono");
         // Escritorio = todo menos el juego; si no se puede excluir al juego, todo el sistema.
-        let (desk, fallback) = match pid {
-            Some(p) => (Source::AllBut(p), Some(Source::System)),
-            None => (Source::System, None),
-        };
+        let (desk, fallback) = desktop_sources(pid, &cfg.output_device);
         let on = cfg.desktop_audio;
         self.desktop.sync(on.then_some(desk), fallback.filter(|_| on), now, "escritorio");
+    }
+}
+
+/// Una salida explícita nunca cae en otra: se reintenta si se desconecta.
+fn desktop_sources(pid: Option<u32>, output: &str) -> (Source, Option<Source>) {
+    if !output.is_empty() {
+        (Source::Output(output.into()), None)
+    } else {
+        match pid {
+            Some(p) => (Source::AllBut(p), Some(Source::System)),
+            None => (Source::System, None),
+        }
     }
 }
 
@@ -315,6 +324,11 @@ fn session(
                     }
                 }
                 Ok(Cmd::Update(c)) => {
+                    if cfg.output_device != c.output_device {
+                        // No mezclar el audio anterior con el de otra salida (ni duplicar el juego).
+                        au.desktop = Channel::default();
+                        au.game_ch = Channel::default();
+                    }
                     *cfg = c;
                     au.sync(cfg, now_100ns() - t0);
                 }
@@ -428,7 +442,7 @@ fn mixed_audio(cfg: &Config, au: &AudioState, from: i64, to: i64) -> Vec<i16> {
         let mix = &mut buf[..(c1 - c0) * 2];
         mix.fill(0.0);
         let f = from + c0 as i64;
-        if cfg.game_audio {
+        if cfg.separate_game_audio() {
             au.game_ch.buf.mix_into(mix, f, cfg.game_volume as f32 / 100.0);
         }
         if cfg.mic_audio {
@@ -468,7 +482,7 @@ fn save_clip(cfg: &Config, packets: &VecDeque<Packet>, enc: &Encoder, au: &Audio
     let end = pk.last().map_or(base, |p| p.pts) + frame_dur;
     let audio = cfg.audio_on().then(|| mixed_audio(cfg, au, frames_at(base), frames_at(end)));
     if au.game.pid().is_none() {
-        if cfg.game_audio {
+        if cfg.separate_game_audio() {
             log("clip sin canal de juego: no se detectó ningún juego");
         }
         if cfg.capture_mode == CaptureMode::GamesOnly {
@@ -497,4 +511,39 @@ fn save_clip(cfg: &Config, packets: &VecDeque<Packet>, enc: &Encoder, au: &Audio
         }
     });
     true
+}
+
+#[cfg(all(test, feature = "devtools"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_output_preserves_process_routing() {
+        assert_eq!(desktop_sources(Some(42), ""), (Source::AllBut(42), Some(Source::System)));
+        assert_eq!(desktop_sources(None, ""), (Source::System, None));
+    }
+
+    #[test]
+    fn explicit_output_never_falls_back_to_another_device() {
+        for pid in [None, Some(42)] {
+            assert_eq!(desktop_sources(pid, "headphones"), (Source::Output("headphones".into()), None));
+        }
+    }
+
+    #[test]
+    fn explicit_output_does_not_mix_game_twice_and_keeps_mic() {
+        let mut au = AudioState {
+            game_ch: Channel::default(), desktop: Channel::default(), mic: Channel::default(),
+            game: game::Detector::default(), next_check: 0, masks: Vec::new(),
+        };
+        au.game_ch.buf.push_at(0, Some(&[1000, 1000]), 1);
+        au.desktop.buf.push_at(0, Some(&[100, 100]), 1);
+        au.mic.buf.push_at(0, Some(&[10, 10]), 1);
+        let mut cfg = Config { mic_audio: true, ..Config::default() };
+        assert_eq!(mixed_audio(&cfg, &au, 0, 1), vec![1110, 1110]);
+        cfg.output_device = "headphones".into();
+        assert_eq!(mixed_audio(&cfg, &au, 0, 1), vec![110, 110]);
+        cfg.desktop_audio = false;
+        assert_eq!(mixed_audio(&cfg, &au, 0, 1), vec![10, 10]);
+    }
 }

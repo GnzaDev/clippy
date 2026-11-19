@@ -32,6 +32,8 @@ use crate::mf::{frames_at, RATE};
 pub enum Source {
     /// Todo lo que suena en el dispositivo de salida por defecto.
     System,
+    /// Todo lo que suena en esta salida, sin cambiar la salida de Windows.
+    Output(String),
     /// Solo este proceso (y sus hijos).
     Only(u32),
     /// Todo menos este proceso (y sus hijos).
@@ -177,6 +179,11 @@ impl Client {
                 let dev = default_device()?;
                 let id = device_id(&dev);
                 (dev.Activate::<IAudioClient>(CLSCTX_ALL, None)?, id)
+            }
+            Source::Output(id) => {
+                let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+                let dev = en.GetDevice(&windows::core::HSTRING::from(id.as_str()))?;
+                (dev.Activate::<IAudioClient>(CLSCTX_ALL, None)?, device_id(&dev))
             }
             Source::Only(pid) => (activate_process(*pid, true)?, String::new()),
             Source::AllBut(pid) => (activate_process(*pid, false)?, String::new()),
@@ -353,12 +360,21 @@ unsafe fn device_id(dev: &IMMDevice) -> String {
 
 /// Micrófonos conectados: (id, nombre).
 pub fn capture_devices() -> Vec<(String, String)> {
+    devices(eCapture)
+}
+
+/// Salidas conectadas (auriculares, parlantes, HDMI, virtuales): (id, nombre).
+pub fn output_devices() -> Vec<(String, String)> {
+    devices(eRender)
+}
+
+fn devices(flow: EDataFlow) -> Vec<(String, String)> {
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::System::Com::STGM_READ;
     let mut v = Vec::new();
     unsafe {
         let Ok(en) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) else { return v };
-        let Ok(col) = en.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) else { return v };
+        let Ok(col) = en.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE) else { return v };
         for i in 0..col.GetCount().unwrap_or(0) {
             let Ok(dev) = col.Item(i) else { continue };
             let id = device_id(&dev);
@@ -366,7 +382,11 @@ pub fn capture_devices() -> Vec<(String, String)> {
                 .OpenPropertyStore(STGM_READ)
                 .and_then(|ps| ps.GetValue(&PKEY_Device_FriendlyName))
                 .map(|p| p.to_string())
-                .unwrap_or_else(|_| tr!("Micrófono", "Microphone", "Microfone").into());
+                .unwrap_or_else(|_| if flow == eCapture {
+                    tr!("Micrófono", "Microphone", "Microfone").into()
+                } else {
+                    tr!("Salida de audio", "Audio output", "Saída de áudio").into()
+                });
             v.push((id, name));
         }
     }

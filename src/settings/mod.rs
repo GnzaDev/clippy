@@ -69,6 +69,7 @@ struct SettingsApp {
     /// Carpeta y fecha de la última vez que se contaron los clips.
     clips_seen: Option<(std::path::PathBuf, Option<SystemTime>)>,
     mics: Vec<(String, String)>,
+    outputs: Vec<(String, String)>,
     /// Versión nueva disponible y estado de la descarga.
     update: Option<(String, String)>,
     update_status: Shared<Result<(), String>>,
@@ -117,6 +118,7 @@ impl SettingsApp {
             clips: (0, None),
             clips_seen: None,
             mics: audio::capture_devices(),
+            outputs: audio::output_devices(),
             update: None,
             update_status: Default::default(),
             updating: false,

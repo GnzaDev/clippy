@@ -73,6 +73,8 @@ pub struct Config {
     /// Audio del escritorio (todo lo demás: Discord, música, etc.).
     pub desktop_audio: bool,
     pub desktop_volume: u32,
+    /// Salida a capturar; vacío conserva la separación por proceso (Juego / Escritorio).
+    pub output_device: String,
     /// Micrófono (apagado por defecto). `mic_device` vacío = el predeterminado de Windows.
     pub mic_audio: bool,
     pub mic_volume: u32,
@@ -139,6 +141,7 @@ impl Default for Config {
             game_volume: 100,
             desktop_audio: true,
             desktop_volume: 100,
+            output_device: String::new(),
             mic_audio: false,
             mic_volume: 100,
             mic_device: String::new(),
@@ -179,8 +182,12 @@ impl Config {
         }
     }
 
+    pub fn separate_game_audio(&self) -> bool {
+        self.game_audio && self.output_device.is_empty()
+    }
+
     pub fn audio_on(&self) -> bool {
-        self.game_audio || self.desktop_audio || self.mic_audio
+        self.separate_game_audio() || self.desktop_audio || self.mic_audio
     }
 
     pub fn sanitize(&mut self) {
@@ -311,4 +318,28 @@ fn default_output_dir() -> PathBuf {
         .unwrap_or_default()
         .join("Videos")
         .join("Clippy")
+}
+
+#[cfg(all(test, feature = "devtools"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_config_keeps_default_audio_routing() {
+        let cfg: Config = serde_json::from_str(r#"{"game_audio":true}"#).unwrap();
+        assert!(cfg.output_device.is_empty());
+        assert!(cfg.separate_game_audio());
+    }
+
+    #[test]
+    fn output_selection_round_trips_without_enabling_muted_audio() {
+        let cfg = Config {
+            output_device: "headphones-id".into(), desktop_audio: false, mic_audio: false,
+            ..Config::default()
+        };
+        let loaded: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(loaded.output_device, "headphones-id");
+        assert!(!loaded.separate_game_audio());
+        assert!(!loaded.audio_on());
+    }
 }
